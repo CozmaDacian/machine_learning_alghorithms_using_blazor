@@ -5,20 +5,20 @@
 @using machine_learnintg.Services
 @inject AppState AppStateService
 @inject NavigationManager Navigation
+
 <h3>1. Data import & Configuration</h3>
 
 <div class="card mb-4">
     <div class="card-body">
         <h5 class="card-title">Upload csv</h5>
         <p class="text-muted">Select a .csv file to begin. The file must have a header row</p>
-        <InputFile OnChange="HanddleFileSelected" class="form-control" accept =".csv"></InputFile>
-
+        <InputFile OnChange="HanddleFileSelected" class="form-control" accept=".csv" @ref="Input"></InputFile>
     </div>
 </div>
 
 @if (isLoading)
 {
-    <div class="alert alert-info" >Processing CSV file </div>
+    <div class="alert alert-info">Processing CSV file </div>
 }
 @if (errorMessage != null)
 {
@@ -26,65 +26,56 @@
 }
 @if (rawFrame != null)
 {
-    <div class ="card">
-        <div class = "card-header">
-
-            <h5>2.Configure collumns</h5>
+    <div class="card">
+        <div class="card-header">
+            <h5>2. Configure columns</h5>
             <small>
                 Define the role for each column.
                 <span class="badge bg-secondary">Ignored</span> columns will not be part of the dataset.
             </small>
-
-
         </div>
 
         <div class="card-body">
-
-            <table class="table table-hover allign-middle">
+            <table class="table table-hover align-middle">
                 <thead>
                     <tr>
-                       <th>Collumn Name</th>
-                       <th>Preview row 1</th>
-                       <th class="text-center" style="width: 200px">Use a feature</th>
-                       <th class="text-center" style="width:200px">Is Target Label</th>
-                       <th class="text-center" style="width:200px">Status</th>
-
+                        <th>Column Name</th>
+                        <th>Preview row 1</th>
+                        <th class="text-center" style="width: 200px">Use a feature</th>
+                        <th class="text-center" style="width:200px">Is Target Label</th>
+                        <th class="text-center" style="width:200px">Status</th>
                     </tr>
-
-
                 </thead>
                 <tbody>
                     @foreach (var col in columnConfigs)
                     {
-                       <tr class="@(IsIgnored(col) ? "table-secondary text-muted" :"")"> 
-                           <td>
-                               <strong>@col.Name</strong>
-                           </td>
-                           <td>@col.PreviewValue</td>
-                           <td class="text-center">
-                               <input type="checkbox"
-                                   class="form-check-input"
-                                   checked ="@col.IsFeature"
-                                   disabled="@col.IsLabel"
-                                   @onchange="@(e => ToggleFeature(col,e.Value))"
-                               />
-                           </td>
-                           
-                           <td class="text-center">
-                               <input type="radio"
-                                   name="targetGroup"
-                                   class="form-check-input"
-                                   checked="@col.IsLabel"
-                                   @onchange="@(()=>SetLabel(col))"
-                                />
-                           </td>
+                        <tr class="@(IsIgnored(col) ? "table-secondary text-muted" :"")">
+                            <td>
+                                <strong>@col.Name</strong>
+                            </td>
+                            <td>@col.PreviewValue</td>
+                            <td class="text-center">
+                                <input type="checkbox"
+                                       class="form-check-input"
+                                       checked="@col.IsFeature"
+                                       disabled="@col.IsLabel"
+                                @onchange="@(e => ToggleFeature(col,e.Value))" />
+                            </td>
 
-                           <td class="text-center">
+                            <td class="text-center">
+                                <input type="radio"
+                                       name="targetGroup"
+                                       class="form-check-input"
+                                       checked="@col.IsLabel"
+                                @onchange="@(()=>SetLabel(col))" />
+                            </td>
+
+                            <td class="text-center">
                                 @if (col.IsLabel)
                                 {
                                     <span class="badge bg-success">Label</span>
-
-                                }else if (col.IsFeature)
+                                }
+                                else if (col.IsFeature)
                                 {
                                     <span class="badge bg-primary">Feature</span>
                                 }
@@ -92,14 +83,9 @@
                                 {
                                     <span class="badge bg-secondary">Ignored</span>
                                 }
-
-
-
-                           </td>
-                       </tr> 
-
+                            </td>
+                        </tr>
                     }
-
                 </tbody>
             </table>
             <div class="d-flex justify-content-between mt-3 align-items-center">
@@ -115,38 +101,48 @@
             </div>
         </div>
     </div>
-
 }
 
 @code {
     private DataFrame rawFrame;
-    private List<CollumnConfig> columnConfigs = new();
+    private List<ColumnConfig> columnConfigs = new();
     private bool isLoading = false;
     private string errorMessage;
-    class CollumnConfig
-    {
-        public string Name { get; set; }
-        public object PreviewValue { get; set; }
-        public bool IsFeature { get; set; }
-        public bool IsLabel { get; set; }
+
+    protected override void OnInitialized()
+    {   
+       
+        // 1. RESTORE STATE: Check if we have saved data in the Service
+        if (AppStateService.RawDataFrame != null && AppStateService.ImportConfigurations != null)
+        {
+            // Load the previous state back into this page's variables
+
+            rawFrame = AppStateService.RawDataFrame;
+            columnConfigs = AppStateService.ImportConfigurations;
+        }
     }
 
     private async Task HanddleFileSelected(InputFileChangeEventArgs e)
     {
-
         isLoading = true;
         errorMessage = null;
         rawFrame = null;
-        // Max file size = 25 MB
         columnConfigs.Clear();
         try
         {
+            // Max file size = 25 MB
             long maxFileSize = 1024 * 1024 * 25;
 
             var file = e.File;
             using var stream = file.OpenReadStream(maxFileSize);
+
+            // Read CSV
             rawFrame = await DataFrame.ReadCsvStreamAsync(stream);
+
             InitializeCollumns();
+
+            // 2. SAVE STATE: Save immediately after loading so a refresh/navigation keeps the file
+            AppStateService.SaveImportState(rawFrame, columnConfigs);
         }
         catch (Exception ex)
         {
@@ -156,14 +152,16 @@
         {
             isLoading = false;
         }
-
     }
-    private void ToggleFeature(CollumnConfig col, object isChecked)
+
+    private void ToggleFeature(ColumnConfig col, object isChecked)
     {
         col.IsFeature = (bool)isChecked;
+        // Optional: Save state on every click if you want extreme persistence
+        // AppStateService.SaveImportState(rawFrame, columnConfigs);
     }
 
-    private void SetLabel(CollumnConfig targetCol)
+    private void SetLabel(ColumnConfig targetCol)
     {
         foreach (var col in columnConfigs)
         {
@@ -172,6 +170,7 @@
                 col.IsFeature = false;
         }
     }
+
     private void FinalizeDataset()
     {
         try
@@ -187,21 +186,23 @@
             MLDataSet dataset = rawFrame.ToMLDataSet(labelCol, featureCols);
 
             AppStateService.SetDataSet(dataset);
-            AppStateService.SetDataFrame(rawFrame);
-            
-            Navigation.NavigateTo("/train"); // Uncomment when ready
-            errorMessage = null; // Clear any previous errors
 
-            // Temporary success message for the tutorial
-            isLoading = false; // reuse loading flag logic or add a success flag
+            // 3. SAVE STATE: Ensure final configuration is saved before leaving
+            AppStateService.SaveImportState(rawFrame, columnConfigs);
+
+            Navigation.NavigateTo("/train");
+            errorMessage = null;
+            isLoading = false;
         }
         catch (Exception ex)
         {
             errorMessage = $"Error creating dataset: {ex.Message}";
         }
     }
+
     private bool CanFinalize => columnConfigs.Any(c => c.IsLabel) && columnConfigs.Any(c => c.IsFeature);
-    private bool IsIgnored(CollumnConfig col) => !col.IsFeature && !col.IsLabel;
+    private bool IsIgnored(ColumnConfig col) => !col.IsFeature && !col.IsLabel;
+
     private void InitializeCollumns()
     {
         if (rawFrame == null || rawFrame.CollumnNames.Count == 0) return;
@@ -209,7 +210,7 @@
         {
             var preview = rawFrame[colName].FirstOrDefault();
 
-            columnConfigs.Add(new CollumnConfig
+            columnConfigs.Add(new ColumnConfig
                 {
                     Name = colName,
                     PreviewValue = preview,
@@ -224,5 +225,3 @@
         lastCol.IsLabel = true;
     }
 }
-}
-
