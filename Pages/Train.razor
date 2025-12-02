@@ -1,0 +1,321 @@
+﻿@page "/train"
+@using Models
+@using Evaluation
+@using machine_learnintg.Services
+@using mlDataSet
+@using layer 
+@inject AppState AppStateService
+@inject NavigationManager Navigation
+
+<div class="container mt-4">
+    <h3>Model Training</h3>
+
+    @if (errorMessage != null)
+    {
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            <strong>Error:</strong> @errorMessage
+            <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    @if (AppStateService.CurrentDataSet == null || AppStateService.CurrentDataSet.Points.Count == 0)
+    {
+        <div class="alert alert-warning">
+            No dataset loaded. Please go to the <a href="data-import">Loader</a> to import data.
+        </div>
+    }
+    else
+    {
+        <div class="row">
+            <!-- Left Column: Configuration -->
+            <div class="col-md-4">
+                <div class="card mb-3">
+                    <div class="card-header bg-primary text-white">1. Model Selection</div>
+                    <div class="card-body">
+                        <label class="form-label">Select Algorithm</label>
+                        <select class="form-select mb-3" @bind="selectedModelType">
+                            <option value="KNN">K-Nearest Neighbors</option>
+                            <option value="NV">Naive Bayes</option>
+                            <option value="NN">Deep Neural Network</option>
+                        </select>
+
+                        <!-- Dynamic Hyperparameters -->
+                        @if (selectedModelType == "KNN")
+                        {
+                            <div class="mb-3">
+                                <label class="form-label">K (Neighbors)</label>
+                                <input type="number" class="form-control" @bind="knnK" min="1" max="50" />
+                            </div>
+                        }
+                        else if (selectedModelType == "NN")
+                        {
+                            <div class="mb-3">
+                                <label class="form-label">Epochs</label>
+                                <input type="number" class="form-control" @bind="nnEpochs" min="1" max="10000" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Learning Rate</label>
+                                <input type="number" class="form-control" @bind="nnLearningRate" step="0.001" />
+                            </div>
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" @bind="normalizeData" id="normCheck">
+                                <label class="form-check-label" for="normCheck">
+                                    Normalize Data (Required for NN)
+                                </label>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <div class="card mb-3">
+                    <div class="card-header bg-secondary text-white">2. Data Split</div>
+                    <div class="card-body">
+                        <label class="form-label">Training Data: @(trainSplit * 100)%</label>
+                        <input type="range" class="form-range" min="0.1" max="0.9" step="0.1" @bind="trainSplit" />
+                        <div class="d-flex justify-content-between text-muted small">
+                            <span>10%</span>
+                            <span>90%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="btn btn-success w-100 py-2" @onclick="TrainAndEvaluate" disabled="@isTraining">
+                    @if (isTraining)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        <span> Training...</span>
+                    }
+                    else
+                    {
+                        <span>Train Model</span>
+                    }
+                </button>
+            </div>
+
+            <!-- Right Column: Results -->
+            <div class="col-md-8">
+                @if (evaluationResults != null)
+                {
+                    <div class="card">
+                        <div class="card-header">Evaluation Results</div>
+                        <div class="card-body">
+                            <h5 class="card-title">@activeModel?.Name</h5>
+                            <hr />
+                            <div class="row text-center">
+                                <div class="col-md-3">
+                                    <div class="p-3 border rounded bg-light">
+                                        <h3>@evaluationResults["Accuracy"].ToString("P1")</h3>
+                                        <small>Accuracy</small>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="p-3 border rounded bg-light">
+                                        <h3>@evaluationResults["Precision"].ToString("P1")</h3>
+                                        <small>Precision</small>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="p-3 border rounded bg-light">
+                                        <h3>@evaluationResults["Recall"].ToString("P1")</h3>
+                                        <small>Recall</small>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="p-3 border rounded bg-light">
+                                        <h3>@evaluationResults["F1 Score (Macro)"].ToString("P1")</h3>
+                                        <small>F1 Score</small>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="mt-4">
+                                <h6>Prediction Sample (Test Set)</h6>
+                                <table class="table table-sm table-bordered">
+                                    <thead>
+                                        <tr>
+                                            <th>Actual Label</th>
+                                            <th>Predicted</th>
+                                            <th>Correct?</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var item in samplePredictions)
+                                        {
+                                            <tr class="@(item.Correct ? "table-success" : "table-danger")">
+                                                <td>@item.Actual:F2</td>
+                                                <td>@item.Predicted:F2</td>
+                                                <td>@(item.Correct ? "Yes" : "No")</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private string selectedModelType = "KNN";
+    private double trainSplit = 0.7;
+    private bool isTraining = false;
+    private string errorMessage;
+    private bool normalizeData = true; // Default to true
+    
+    // Hyperparameters
+    private int knnK = 3;
+    private int nnEpochs = 200; // Increased epochs slightly
+    private double nnLearningRate = 0.1; // Increased LR for normalized data
+
+    // Results
+    private IClassifier activeModel;
+    private Dictionary<string, double> evaluationResults;
+    private List<PredictionResult> samplePredictions;
+
+    class PredictionResult { public double Actual; public double Predicted; public bool Correct; }
+
+    private async Task TrainAndEvaluate()
+    {
+        isTraining = true;
+        errorMessage = null;
+        evaluationResults = null;
+        await Task.Yield(); 
+
+        try
+        {
+            // 1. Get Data
+            var originalData = AppStateService.CurrentDataSet;
+            if (originalData == null || originalData.Points.Count == 0)
+                throw new Exception("Dataset is empty. Please reload your CSV.");
+
+            // 2. Clone and Normalize if requested
+            MLDataSet workingData;
+            if (normalizeData && selectedModelType == "NN")
+            {
+                workingData = NormalizeDataset(originalData);
+            }
+            else
+            {
+                workingData = originalData;
+            }
+
+            var (trainData, testData) = workingData.Split(trainSplit);
+            int inputSize = workingData.Points[0].Features.Length;
+
+            // 3. Create Model
+            activeModel = CreateModel(inputSize);
+
+            // 4. Run Training in Background
+            var results = await Task.Run(() => 
+            {
+                activeModel.Train(trainData);
+
+                var actuals = testData.Points.Select(p => p.Label).ToArray();
+                var preds = testData.Points.Select(p => activeModel.Predict(p.Features)).ToArray();
+
+                var evaluators = new List<IEvaluation> 
+                { 
+                    new Accuracy(), new Precision(), new Recall(), new F1Score() 
+                };
+
+                var metrics = new Dictionary<string, double>();
+                foreach (var eval in evaluators)
+                {
+                    metrics[eval.Name] = eval.Calculate(actuals, preds);
+                }
+
+                var samples = new List<PredictionResult>();
+                for(int i = 0; i < Math.Min(5, actuals.Length); i++)
+                {
+                    samples.Add(new PredictionResult 
+                    { 
+                        Actual = actuals[i], 
+                        Predicted = preds[i], 
+                        Correct = Math.Abs(actuals[i] - preds[i]) < 0.1 
+                    });
+                }
+
+                return (metrics, samples);
+            });
+
+            evaluationResults = results.metrics;
+            samplePredictions = results.samples;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Training failed: {ex.Message}";
+            Console.WriteLine(ex);
+        }
+        finally
+        {
+            isTraining = false;
+        }
+    }
+
+    private MLDataSet NormalizeDataset(MLDataSet original)
+    {
+        // Simple Min-Max Normalization
+        var normalized = new MLDataSet { FeatureNames = original.FeatureNames };
+        int featureCount = original.Points[0].Features.Length;
+        
+        double[] min = new double[featureCount];
+        double[] max = new double[featureCount];
+
+        // Initialize min/max
+        for(int i=0; i<featureCount; i++) { min[i] = double.MaxValue; max[i] = double.MinValue; }
+
+        // Find Min/Max
+        foreach(var p in original.Points)
+        {
+            for(int i=0; i<featureCount; i++)
+            {
+                if (p.Features[i] < min[i]) min[i] = p.Features[i];
+                if (p.Features[i] > max[i]) max[i] = p.Features[i];
+            }
+        }
+
+        // Apply Normalization
+        foreach(var p in original.Points)
+        {
+            var newFeatures = new double[featureCount];
+            for(int i=0; i<featureCount; i++)
+            {
+                double range = max[i] - min[i];
+                if (range == 0) newFeatures[i] = 0;
+                else newFeatures[i] = (p.Features[i] - min[i]) / range;
+            }
+            normalized.Points.Add(new DataPoint { Features = newFeatures, Label = p.Label });
+        }
+        return normalized;
+    }
+
+    private IClassifier CreateModel(int inputSize)
+    {
+        switch (selectedModelType)
+        {
+            case "KNN":
+                var knn = new KNNClassifier();
+                knn.Hyperparameters["K"] = knnK;
+                return knn;
+            
+            case "NV":
+                return new NaiveBayes();
+
+            case "NN":
+                var nn = new SequentialModel(new BinaryCrossEntropy()); 
+                nn.Hyperparameters["Epochs"] = nnEpochs;
+                nn.Hyperparameters["LearningRate"] = nnLearningRate;
+                
+                nn.Add(new DenseLayer(inputSize, 1)); 
+                nn.Add(new SigmoidLayer());
+                
+                return nn;
+
+            default:
+                throw new NotImplementedException();
+        }
+    }
+}

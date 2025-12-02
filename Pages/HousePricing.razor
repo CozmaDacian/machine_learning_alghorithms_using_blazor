@@ -1,0 +1,325 @@
+﻿@page "/ml-studio"
+@using System.IO
+@using mlDataSet
+@using Models
+@using layer
+@using Evaluation
+@using DataInterpretation
+@inject Microsoft.AspNetCore.Hosting.IWebHostEnvironment WebEnvironment
+
+<div class="container-fluid">
+    <h2 class="mb-4">Machine Learning Studio</h2>
+
+    <div class="row">
+        <!-- LEFT COLUMN: Configuration -->
+        <div class="col-md-4">
+
+            <!-- 1. DATA UPLOAD -->
+            <div class="card mb-3">
+                <div class="card-header bg-primary text-white">1. Data Source</div>
+                <div class="card-body">
+                    <InputFile OnChange="LoadFile" class="form-control mb-2" />
+                    @if (IsLoading)
+                    {
+                        <div class="text-info">Loading CSV...</div>
+                    }
+                    @if (CurrentDataFrame != null)
+                    {
+                        <div class="alert alert-success py-1">Loaded @CurrentDataFrame.RowCount rows.</div>
+                    }
+                </div>
+            </div>
+
+            <!-- 2. FEATURE SELECTION -->
+            @if (CurrentDataFrame != null)
+            {
+                <div class="card mb-3">
+                    <div class="card-header bg-secondary text-white">2. Select Columns</div>
+                    <div class="card-body" style="max-height: 300px; overflow-y: auto;">
+                        <label class="form-label fw-bold">Target Label (Y):</label>
+                        <select class="form-select mb-3" @bind="SelectedLabelColumn">
+                            @foreach (var col in CurrentDataFrame.CollumnNames)
+                            {
+                                <option value="@col">@col</option>
+                            }
+                        </select>
+
+                        <label class="form-label fw-bold">Features (X):</label>
+                        @foreach (var col in CurrentDataFrame.CollumnNames)
+                        {
+                            @if (col != SelectedLabelColumn)
+                            {
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox"
+                                           checked="@SelectedFeatures.Contains(col)"
+                                    @onchange="@(e => ToggleFeature(col, e.Value))" />
+                                    <label class="form-check-label">@col</label>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+            }
+
+            <!-- 3. MODEL CONFIG -->
+            <div class="card mb-3">
+                <div class="card-header bg-dark text-white">3. Model Settings</div>
+                <div class="card-body">
+                    <label>Algorithm:</label>
+                    <select class="form-select mb-2" @bind="SelectedAlgorithm">
+                        <option value="KNN">K-Nearest Neighbors</option>
+                        <option value="NB">Naive Bayes</option>
+                        <option value="NN">Neural Network (Logistic)</option>
+                    </select>
+
+                    <label>Train/Test Split: @(SplitPercentage * 100)% Train</label>
+                    <input type="range" class="form-range" min="0.1" max="0.9" step="0.1" @bind="SplitPercentage" />
+
+                    @if (SelectedAlgorithm == "KNN")
+                    {
+                        <label>Neighbors (K):</label>
+                        <input type="number" class="form-control" @bind="HyperParamK" />
+                    }
+                    @if (SelectedAlgorithm == "NN")
+                    {
+                        <label>Epochs:</label>
+                        <input type="number" class="form-control" @bind="HyperParamEpochs" />
+                        <label>Learning Rate:</label>
+                        <input type="number" class="form-control" @bind="HyperParamLR" step="0.001" />
+                    }
+                </div>
+            </div>
+
+            <button class="btn btn-success w-100 btn-lg" @onclick="TrainModel"
+                    disabled="@(CurrentDataFrame == null || IsTraining)">
+                @if (IsTraining)
+                {
+                    <span>Training...</span>
+                }
+                else
+                {
+                    <span>Train Model</span>
+                }
+            </button>
+
+        </div>
+
+        <!-- RIGHT COLUMN: Results -->
+        <div class="col-md-8">
+            @if (EvaluationResults != null)
+            {
+                <div class="card">
+                    <div class="card-header bg-success text-white">Evaluation Results</div>
+                    <div class="card-body">
+                        <div class="row text-center mb-4">
+                            <div class="col-md-4">
+                                <h3>@EvaluationResults.Accuracy.ToString("P1")</h3>
+                                <small>Accuracy</small>
+                            </div>
+                            <div class="col-md-4">
+                                <h3>@EvaluationResults.F1.ToString("F3")</h3>
+                                <small>F1 Score</small>
+                            </div>
+                            <div class="col-md-4">
+                                <h3>@EvaluationResults.Recall.ToString("F3")</h3>
+                                <small>Recall</small>
+                            </div>
+                        </div>
+
+                        <hr />
+
+                        <h5 class="text-center">Confusion Matrix</h5>
+                        <div class="d-flex justify-content-center">
+                            <table class="table table-bordered w-auto text-center">
+                                <thead>
+                                    <tr>
+                                        <th></th>
+                                        <th class="bg-light">Predicted 0</th>
+                                        <th class="bg-light">Predicted 1</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <th class="bg-light">Actual 0</th>
+                                        <td class="bg-white">@EvaluationResults.TN (TN)</td>
+                                        <td class="bg-warning">@EvaluationResults.FP (FP)</td>
+                                    </tr>
+                                    <tr>
+                                        <th class="bg-light">Actual 1</th>
+                                        <td class="bg-warning">@EvaluationResults.FN (FN)</td>
+                                        <td class="bg-success text-white">@EvaluationResults.TP (TP)</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="alert alert-light text-center mt-5">
+                    <h4>Upload data and train a model to see results here.</h4>
+                </div>
+            }
+
+            <!-- Error Log -->
+            @if (!string.IsNullOrEmpty(ErrorMessage))
+            {
+                <div class="alert alert-danger mt-3">@ErrorMessage</div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    // --- STATE ---
+    private DataFrame CurrentDataFrame;
+    private string SelectedLabelColumn;
+    private HashSet<string> SelectedFeatures = new HashSet<string>();
+
+    private string SelectedAlgorithm = "KNN";
+    private double SplitPercentage = 0.8;
+
+    // Hyperparameters
+    private int HyperParamK = 5;
+    private int HyperParamEpochs = 500;
+    private double HyperParamLR = 0.01;
+
+    // UI State
+    private bool IsLoading = false;
+    private bool IsTraining = false;
+    private string ErrorMessage = "";
+
+    private EvalResultDTO EvaluationResults;
+
+    class EvalResultDTO
+    {
+        public double Accuracy { get; set; }
+        public double F1 { get; set; }
+        public double Recall { get; set; }
+        public int TP { get; set; }
+        public int TN { get; set; }
+        public int FP { get; set; }
+        public int FN { get; set; }
+    }
+
+    // --- 1. LOAD FILE ---
+    private async Task LoadFile(InputFileChangeEventArgs e)
+    {
+        IsLoading = true;
+        ErrorMessage = "";
+        try
+        {
+            // Max size 5MB
+            using var stream = e.File.OpenReadStream(5000000);
+
+            // Use the DataFrame class to read generic CSV
+            CurrentDataFrame = await DataFrame.ReadCsvStreamAsync(stream);
+
+            // Auto-select first/last columns as defaults
+            if (CurrentDataFrame.CollumnNames.Any())
+            {
+                SelectedLabelColumn = CurrentDataFrame.CollumnNames.Last();
+                SelectedFeatures.Clear();
+                foreach (var col in CurrentDataFrame.CollumnNames.Take(CurrentDataFrame.CollumnNames.Count - 1))
+        {
+                    SelectedFeatures.Add(col);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Error loading file: {ex.Message}";
+        }
+        IsLoading = false;
+    }
+
+    private void ToggleFeature(string col, object checkedValue)
+    {
+        if ((bool)checkedValue) SelectedFeatures.Add(col);
+        else SelectedFeatures.Remove(col);
+    }
+
+    // --- 2. TRAIN ---
+    private async Task TrainModel()
+    {
+        if (CurrentDataFrame == null || SelectedFeatures.Count == 0)
+        {
+            ErrorMessage = "Please select features.";
+            return;
+        }
+
+        IsTraining = true;
+        ErrorMessage = "";
+        EvaluationResults = null;
+
+        await Task.Run(() =>
+        {
+            try
+            {
+                // A. Convert DataFrame to MLDataSet (Numbers only)
+                var mlData = CurrentDataFrame.ToMLDataSet(SelectedLabelColumn, SelectedFeatures.ToArray());
+
+                // B. Split
+                var split = mlData.Split(SplitPercentage);
+
+                // C. Select & Config Model
+                IClassifier model = null;
+
+                switch (SelectedAlgorithm)
+                {
+                    case "KNN":
+                        var knn = new KNNClassifier();
+                        knn.Hyperparameters["K"] = HyperParamK;
+                        model = knn;
+                        break;
+                    case "NB":
+                        model = new NaiveBayes();
+                        break;
+                    case "NN":
+                        var nn = new SequentialModel(new layer.BinaryCrossEntropy());
+                        nn.Add(new DenseLayer(SelectedFeatures.Count, 4)); // Hidden Layer
+                        nn.Add(new ReLULayer());
+                        nn.Add(new DenseLayer(4, 1)); // Output
+                        nn.Add(new SigmoidLayer());
+                        nn.Hyperparameters["Epochs"] = HyperParamEpochs;
+                        nn.Hyperparameters["LearningRate"] = HyperParamLR;
+                        model = nn;
+                        break;
+                }
+
+                // D. Train
+                model.Train(split.Train);
+
+                // E. Evaluate
+                double[] actuals = split.Test.Points.Select(p => p.Label).ToArray();
+                double[] preds = split.Test.Points.Select(p => model.Predict(p.Features)).ToArray();
+
+                // Calculate Metrics
+                var cm = ConfusionMatrix.CalculateConfusionForOne(actuals, preds,1);
+                var acc = new Evaluation.Accuracy().Calculate(actuals, preds);
+                var f1 = new Evaluation.F1Score().Calculate(actuals, preds);
+                // Simple Recall calc (TP / TP+FN)
+                double recall = (cm.TP + cm.FN) > 0 ? (double)cm.TP / (cm.TP + cm.FN) : 0;
+
+                EvaluationResults = new EvalResultDTO
+                    {
+                        Accuracy = acc,
+                        F1 = f1,
+                        Recall = recall,
+                        TP = cm.TP,
+                        TN = cm.TN,
+                        FP = cm.FP,
+                        FN = cm.FN
+                    };
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Training Error: {ex.Message}";
+            }
+        });
+
+        IsTraining = false;
+        await InvokeAsync(StateHasChanged);
+    }
+}
